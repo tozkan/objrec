@@ -4,6 +4,7 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <algorithm>
 #include <iterator>
+#include <iostream>
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -58,6 +59,7 @@ namespace vislab
 
       int mypt;
       int nearestpt;
+      float contribution;
       cv::Point2f offset;
       cv::Rect ROI;
     };
@@ -200,6 +202,7 @@ namespace vislab
       DetectorInternalState state;
       detect1(my_image, obj_cs, state);
       detect2(obj_cs, results, state);
+      filterDetections(results);
     }
 
     void ObjectDetector::detect(const std::vector<cv::Mat>& images, std::vector<std::vector<Detection> >& results,
@@ -248,7 +251,6 @@ namespace vislab
 
 	float distb = knndis[params.knn_search_neighbours-1];
 	distb *= distb;
-
 	std::vector<bool> classused(n_classes, false);
 
 	for(unsigned n=0; n<params.knn_search_neighbours-1; n++){
@@ -277,6 +279,7 @@ namespace vislab
 	    onehypo temphypo;
 	    temphypo.nearestpt = knnin[n];
 	    temphypo.mypt = d;
+      temphypo.contribution = val - distb;
 	    temphypo.ROI = impl->allrects[knnin[n]];
 	    temphypo.ROI.width  *= state.detect_kps[d].size;
 	    temphypo.ROI.height *= state.detect_kps[d].size;
@@ -321,8 +324,8 @@ namespace vislab
 	// cv::GaussianBlur(objc, dst, cv::Size(), 10);
 	// filter2D( objc, dst, objc.depth(), kernel1);
 	sepFilter2D( objc_sd, dst_sd, objc_sd.depth(), kernelx_mask, kernely_mask, cv::Point(-1,-1), 0, cv::BORDER_CONSTANT);
-	sepFilter2D( objc_vc, dst_vc, objc_vc.depth(), kernelx_dist, kernely_dist, cv::Point(-1,-1), 0, cv::BORDER_CONSTANT);
-	obj_cs[m] = dst_sd + dst_vc * params.alpha;
+  sepFilter2D( objc_vc, dst_vc, objc_vc.depth(), kernelx_dist, kernely_dist, cv::Point(-1,-1), 0, cv::BORDER_CONSTANT);
+  obj_cs[m] = dst_sd + dst_vc * params.alpha;
       }
     }
 
@@ -335,12 +338,13 @@ namespace vislab
       //DEBUG_MESSAGE("Finding detections...");
       int ksize = params.kernel_size / params.vote_scale + 1;
 
-
       for (unsigned int m=0; m<obj_cs.size(); m++){
 	const cv::Mat obj_c = obj_cs[m];
 	cv::Mat_<float> obj_c_sm;
 	cv::GaussianBlur(obj_c, obj_c_sm , cv::Size(), 5);
-
+        // do this until d1
+        // see what happened
+        // push the detections if it's ok, don't push if it isn't
 
 	cv::Mat_<float> obj_c_dil(obj_c.size()), minlocarray;
 	cv::Matx<uchar,3,3> element(1,1,1,1,0,1,1,1,1);
@@ -364,7 +368,8 @@ namespace vislab
 
 	    // Collect all the individual points which voted for this hypothesis
 	    std::vector<cv::Point> _mypoints;
-	    std::vector<int> _ptindices;
+	  //  std::vector<int> _ptindices;
+      std::vector<float> _contributions;
 	    std::vector<int> widths, heights;
 	    for(int indy=minloc.y-ksize/2; indy<minloc.y+ksize/2; indy++){
 	      for(int indx=minloc.x-ksize/2; indx<minloc.x+ksize/2; indx++){
@@ -373,33 +378,39 @@ namespace vislab
 
 		if(curind > -1 && curind<state.pt_store.size()){
 		  for(unsigned ptind=0; ptind<state.pt_store[curind].size(); ptind++){
-		    _ptindices.push_back(state.pt_store[curind][ptind].mypt);
-		    widths.push_back(state.pt_store[curind][ptind].ROI.width);
-		    heights.push_back(state.pt_store[curind][ptind].ROI.height);
-		  }
+		//    _ptindices.push_back(state.pt_store[curind][ptind].mypt);
+        // std::cout << state.detect_kps.size() << " " << state.pt_store[curind][ptind].mypt <<  std::endl;
+        cv::Point2f curpt = state.detect_kps[state.pt_store[curind][ptind].mypt].pt;
+        _contributions.push_back(state.pt_store[curind][ptind].contribution);
+        _mypoints.push_back(curpt);
+        widths.push_back(state.pt_store[curind][ptind].ROI.width);
+        heights.push_back(state.pt_store[curind][ptind].ROI.height);
 		}
 	      }
 	    }
 
-	    if(_ptindices.size() == 0) continue;
 
-	    //std::vector<int> distances, distancessorted;
-	    for(int ptind=0; ptind<_ptindices.size(); ptind++){
-	      cv::Point2f curpt = state.detect_kps[_ptindices[ptind]].pt;
-	      _mypoints.push_back(curpt);
-	      //int curdist = abs(curpt.x-minloc.x*params.vote_scale)+abs(curpt.y-minloc.y*params.vote_scale);
-	      //distances.push_back(curdist);
-	      //distancessorted.push_back(curdist);
-	    }
-	    //sort(distancessorted.begin(),distancessorted.end());
-	    // std::cout << distancessorted.size() << std::endl;
-	    //float mediandist = distancessorted[distancessorted.size()/2];
+
+	     if(widths.size() == 0) continue;
+
+
+      //std::vector<int> distances, distancessorted;
+// for(int ptind=0; ptind<_ptindices.size(); ptind++){
+//   // cv::Point2f curpt = state.detect_kps[_ptindices[ptind]].pt;
+//   // _mypoints.push_back(curpt);
+//   //int curdist = abs(curpt.x-minloc.x*params.vote_scale)+abs(curpt.y-minloc.y*params.vote_scale);
+//   //distances.push_back(curdist);
+//   //distancessorted.push_back(curdist);
+// }
+//sort(distancessorted.begin(),distancessorted.end());
+// std::cout << distancessorted.size() << std::endl;
+//float mediandist = distancessorted[distancessorted.size()/2];
+
 
 	    std::sort( widths.begin(), widths.end() );
 	    std::sort( heights.begin(), heights.end() );
 	    int medianw = widths[widths.size()/2];
 	    int medianh = heights[heights.size()/2];
-
 
 	    Detection det;
 	    det.strength = -min;
@@ -410,92 +421,22 @@ namespace vislab
 	    det.bbox = _bbox; //boundingRect(bbpoints);
 	    det.labelnum = m;
 	    det.mypoints = _mypoints;
+      det.contributions = _contributions;
+
+
+
+
 
     //    std::cout << m << " of " << this->detection_thresholds.cols << std::endl;
 	    const float d_thresh = (this->detection_thresholds.at<float>(m) == 0) ? params.detection_thresh: this->detection_thresholds.at<float>(m);
-      std::cout<<"Min is " << min << std::endl;
-      std::cout << "Treshhold is " << d_thresh << std::endl;
 	    if(min < d_thresh) detections.push_back(det);
 	  }
       }
-
-
-
-
       removeOverlappingDetections(detections, results);
+
     }
+  }
 
-    void ObjectDetector::detect2s(const std::vector<cv::Mat>& obj_cs, std::vector<Detection>& results, DetectorInternalState& state) const{
-      assert(obj_cs.size() == this->n_classes && "obj_cs must have n_classes size");
-      assert(this->detection_thresholds.cols == this->n_classes && "detection_thresholds must have n_classes size");
-
-      std::vector<Detection> detections;
-      //DEBUG_MESSAGE("Finding detections...");
-      int ksize = params.kernel_size / params.vote_scale + 1;
-
-      for (unsigned int m=0; m<this->n_classes; m++){
-	const cv::Mat obj_c = obj_cs[m];
-	const float d_thresh = (this->detection_thresholds.at<float>(m) == 0) ? params.detection_thresh: this->detection_thresholds.at<float>(m);
-
-	cv::Mat_<float> obj_c_sm;
-	cv::GaussianBlur(obj_c, obj_c_sm , cv::Size(), 5);
-
-	cv::Mat_<float> obj_c_dil(obj_c.size()), minlocarray;
-	cv::Matx<uchar,3,3> element(1,1,1,1,0,1,1,1,1);
-	cv::dilate(-obj_c_sm,obj_c_dil,element);
-	minlocarray = -obj_c_sm - obj_c_dil;
-
-	for(int _x=0; _x<minlocarray.cols; _x++ )
-	  for(int _y=0; _y<minlocarray.rows; _y++ ){
-	    if(minlocarray.at<float>(_y,_x) <= 0) continue;
-
-	    cv::Point minloc = cv::Point(_x,_y);
-	    double min = obj_c.at<float>(_y,_x);
-
-	    if(min < d_thresh){
-	      Detection det;
-	      float scale_sum;
-	      float scale_count;
-
-	      for(int indy=minloc.y-ksize/2; indy<minloc.y+ksize/2; indy++){
-		for(int indx=minloc.x-ksize/2; indx<minloc.x+ksize/2; indx++){
-		  if(indy<0 || indy>=state.obj_centre_scale[m].rows || indx<0 || indx>=state.obj_centre_scale[m].cols) continue;
-		  //scale
-		  //extdet.pt_scales.push_back(state.obj_centre_scale[m].at<float>(indy,indx));//Just for debugging
-		  //extdet.pt_scale_counts.push_back(state.obj_centre_scalecount[m].at<float>(indy,indx));//Just for debugging
-		  scale_sum += state.obj_centre_scale[m].at<float>(indy,indx);
-		  scale_count += state.obj_centre_scalecount[m].at<float>(indy,indx);
-		}
-	      }
-
-	      if(scale_count == 0) continue;
-
-	      float scale_mean = scale_sum/scale_count;
-	      // std::vector<float> tmp_pt_scales(extdet.pt_scales);
-	      // tmp_pt_scales.erase(std::remove(tmp_pt_scales.begin(), tmp_pt_scales.end(), 0.0), tmp_pt_scales.end());//remove 0.0 elements
-	      // std::sort(tmp_pt_scales.begin(), tmp_pt_scales.end());
-	      // extdet.scale_median = tmp_pt_scales[tmp_pt_scales.size()/2];
-
-	      det.strength = -min;
-	      det.centre = minloc * params.vote_scale;
-	      cv::Rect medianbbox = impl->medianrects_by_class[m];
-
-	      medianbbox.width *= scale_mean;
-	      medianbbox.height *= scale_mean;
-
-	      cv::Rect _bbox( det.centre.x - medianbbox.width/2, det.centre.y - medianbbox.height/2, medianbbox.width, medianbbox.height);
-
-	      det.bbox = _bbox; //boundingRect(bbpoints);
-	      det.labelnum = m;
-
-	      detections.push_back(det);k
-	      //ext_detections.push_back(extdet);
-	    }
-	  }
-      }
-
-      removeOverlappingDetections(detections, results);
-    }
 
     void ObjectDetector::removeOverlappingDetections(const std::vector<Detection>& input_detections, std::vector<Detection>& output_detections) const{
       // Eliminate overlapping detections
@@ -583,10 +524,7 @@ namespace vislab
           cv::rectangle(img, dets[r].bbox, colour, width);
 
           // Convex Hull
-          // std::vector<std::vector<Point> > polys;
-          // polys.push_back(dets[r].hull);
-          // polylines(img, polys, true, colour);
-
+          // std::vector<std::vector<Point> > pState
           // Object Centre
           // circle( img, dets[r].centre, 4, Scalar(255,255,255), -1 );
           cv::circle( img, dets[r].centre, 4, colour, -1 );
@@ -602,6 +540,59 @@ namespace vislab
           cv::putText(img, objname, textpt, 1, width, colour);
         }
     }
+
+    void ObjectDetector::filterDetections(std::vector<Detection> detections) {
+      std::ofstream myfile;
+      myfile.open ("results.txt");
+
+    //  std::cout << "Detections size is " << detections.size() << std::endl;
+
+      for(int i=0; i<detections.size(); i++) {
+       std::cout << "Detection number " << i << std::endl;
+        float min = -detections[i].strength;
+        std::cout << min << std::endl;
+        //Get the list of the points that voted for the detection and their contributions
+        std::vector<cv::Point> points = detections[i].mypoints;
+        std::vector<float> contributions = detections[i].contributions;
+        // SORTING
+        std::vector<std::pair<cv::Point,float> > order(points.size());
+        for (int l=0; l<points.size(); l++){
+          order[l] = std::make_pair(points[l], contributions[l]);
+        }
+        // std::cout << " hi" << std::endl;
+        // for(int j=0;j<order.size();j++) {
+        //   std::cout << contributions[j] << "  " << order[j].second << std::endl;
+        // }
+        std::sort(order.begin(), order.end(),  [=](std::pair<cv::Point,float> a , std::pair<cv::Point,float> b) {
+          return cv::norm(a.first - detections[i].centre) < cv::norm(b.first - detections[i].centre);
+        });
+
+        // We delete the farest point and look at how the minimum and the threshold evolves.
+        for(int j=0; j<points.size();j++) {
+        //  std::cout << "Try Number " << j << std::endl;
+          // Calculate the new radius that will take out the farest point.
+          float distanceToCentre = cv::norm(order[points.size()-j-2].first-detections[i].centre);
+          int newRadius;
+          if(j==points.size()-1) {
+            newRadius=0;
+          }
+          else {
+            newRadius = ceil(distanceToCentre);
+          }
+          // Calculate the new minimum
+          float contribution = order[points.size()-j-1].second;
+          min -= contribution;
+        //  std:: cout << "Contribution is " << contribution << std::endl;
+          // Calculate the new threshold
+          float threshold = -pow(10,7) - pow(10,6)*log(M_PI*pow(newRadius,2));
+        //  std:: cout <<   "Min is " << min << " Threshold is " << threshold <<  " The new radius is " << newRadius << std::endl;
+        //  std:: cout << "Diff is " << min/threshold << std::endl;
+         myfile << min/threshold << std::endl;
+        }
+        }
+        myfile.close();
+      }
+
 
   }//namespace objrec
 }//namespace vislab
