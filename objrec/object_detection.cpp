@@ -540,17 +540,16 @@ namespace vislab
           cv::putText(img, objname, textpt, 1, width, colour);
         }
     }
-
     void ObjectDetector::filterDetections(std::vector<Detection> detections) {
       std::ofstream myfile;
+      int count;
       myfile.open ("results.txt");
 
     //  std::cout << "Detections size is " << detections.size() << std::endl;
 
       for(int i=0; i<detections.size(); i++) {
-       std::cout << "Detection number " << i << std::endl;
+       std::cout << "Detection number " << detections.size() << std::endl;
         float min = -detections[i].strength;
-        std::cout << min << std::endl;
         //Get the list of the points that voted for the detection and their contributions
         std::vector<cv::Point> points = detections[i].mypoints;
         std::vector<float> contributions = detections[i].contributions;
@@ -584,13 +583,14 @@ namespace vislab
           min -= contribution;
         //  std:: cout << "Contribution is " << contribution << std::endl;
           // Calculate the new threshold
-          float threshold = -pow(10,7) - pow(10,6)*log(M_PI*pow(newRadius,2));
+          float threshold = -pow(10,7) - 8*pow(10,3)*M_PI*pow(newRadius,2);
         //  std:: cout <<   "Min is " << min << " Threshold is " << threshold <<  " The new radius is " << newRadius << std::endl;
         //  std:: cout << "Diff is " << min/threshold << std::endl;
-         myfile << min/threshold << std::endl;
+         count++;
         }
         }
         myfile.close();
+        std::cout<<count<<std::endl;
       }
 
 
