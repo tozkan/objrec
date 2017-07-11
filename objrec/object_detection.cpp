@@ -60,6 +60,7 @@ namespace vislab
       int mypt;
       int nearestpt;
       float contribution;
+      float distb;
       cv::Point2f offset;
       cv::Rect ROI;
     };
@@ -259,7 +260,7 @@ namespace vislab
 	  if(classused[curlabel]) continue;
 
 	  float val = knndis[n];
-	  val = val*val; // + 1*dist*dist;
+	  // val = val*val; // + 1*dist*dist;
 
 	  classused[curlabel] = true;
 
@@ -279,6 +280,7 @@ namespace vislab
 	    onehypo temphypo;
 	    temphypo.nearestpt = knnin[n];
 	    temphypo.mypt = d;
+      temphypo.distb = distb;
       temphypo.contribution = val - distb;
 	    temphypo.ROI = impl->allrects[knnin[n]];
 	    temphypo.ROI.width  *= state.detect_kps[d].size;
@@ -369,7 +371,7 @@ namespace vislab
 	    // Collect all the individual points which voted for this hypothesis
 	    std::vector<cv::Point> _mypoints;
 	  //  std::vector<int> _ptindices;
-      std::vector<float> _contributions;
+      std::vector<float> _contributions, _distb;
 	    std::vector<int> widths, heights;
 	    for(int indy=minloc.y-ksize/2; indy<minloc.y+ksize/2; indy++){
 	      for(int indx=minloc.x-ksize/2; indx<minloc.x+ksize/2; indx++){
@@ -382,6 +384,7 @@ namespace vislab
         // std::cout << state.detect_kps.size() << " " << state.pt_store[curind][ptind].mypt <<  std::endl;
         cv::Point2f curpt = state.detect_kps[state.pt_store[curind][ptind].mypt].pt;
         _contributions.push_back(state.pt_store[curind][ptind].contribution);
+        _distb.push_back(state.pt_store[curind][ptind].distb);
         _mypoints.push_back(curpt);
         widths.push_back(state.pt_store[curind][ptind].ROI.width);
         heights.push_back(state.pt_store[curind][ptind].ROI.height);
@@ -422,6 +425,7 @@ namespace vislab
 	    det.labelnum = m;
 	    det.mypoints = _mypoints;
       det.contributions = _contributions;
+      det.distb=_distb;
 
 
 
@@ -429,7 +433,8 @@ namespace vislab
 
     //    std::cout << m << " of " << this->detection_thresholds.cols << std::endl;
 	    const float d_thresh = (this->detection_thresholds.at<float>(m) == 0) ? params.detection_thresh: this->detection_thresholds.at<float>(m);
-	    if(min < d_thresh) detections.push_back(det);
+	    // if(min < d_thresh) detections.push_back(det);
+	    detections.push_back(det);
 	  }
       }
       removeOverlappingDetections(detections, results);
@@ -540,57 +545,67 @@ namespace vislab
           cv::putText(img, objname, textpt, 1, width, colour);
         }
     }
+    int count;
     void ObjectDetector::filterDetections(std::vector<Detection> detections) {
+      count ++;
       std::ofstream myfile;
-      int count;
-      myfile.open ("results.txt");
-
     //  std::cout << "Detections size is " << detections.size() << std::endl;
-
       for(int i=0; i<detections.size(); i++) {
-       std::cout << "Detection number " << detections.size() << std::endl;
+        myfile.clear();
+        myfile.open (std::to_string(count) + "results" + std::to_string(i) + ".txt");
+       std::cout << "Detection number " << i << " Image number " << count << std::endl;
         float min = -detections[i].strength;
+
         //Get the list of the points that voted for the detection and their contributions
         std::vector<cv::Point> points = detections[i].mypoints;
         std::vector<float> contributions = detections[i].contributions;
+        std::vector<float> distb = detections[i].distb;
+
         // SORTING
         std::vector<std::pair<cv::Point,float> > order(points.size());
         for (int l=0; l<points.size(); l++){
           order[l] = std::make_pair(points[l], contributions[l]);
         }
-        // std::cout << " hi" << std::endl;
-        // for(int j=0;j<order.size();j++) {
-        //   std::cout << contributions[j] << "  " << order[j].second << std::endl;
-        // }
         std::sort(order.begin(), order.end(),  [=](std::pair<cv::Point,float> a , std::pair<cv::Point,float> b) {
           return cv::norm(a.first - detections[i].centre) < cv::norm(b.first - detections[i].centre);
         });
+
+        // SORTING
+        std::vector<std::pair<cv::Point,float> > orderdistb(points.size());
+        for (int l=0; l<points.size(); l++){
+          orderdistb[l] = std::make_pair(points[l], distb[l]);
+        }
+        std::sort(orderdistb.begin(), orderdistb.end(),  [=](std::pair<cv::Point,float> a , std::pair<cv::Point,float> b) {
+          return cv::norm(a.first - detections[i].centre) < cv::norm(b.first - detections[i].centre);
+        });
+
 
         // We delete the farest point and look at how the minimum and the threshold evolves.
         for(int j=0; j<points.size();j++) {
         //  std::cout << "Try Number " << j << std::endl;
           // Calculate the new radius that will take out the farest point.
-          float distanceToCentre = cv::norm(order[points.size()-j-2].first-detections[i].centre);
-          int newRadius;
+          float distanceToCentre = cv::norm(order[points.size()-j-2].first - detections[i].centre);
+          float newRadius;
           if(j==points.size()-1) {
             newRadius=0;
           }
           else {
-            newRadius = ceil(distanceToCentre);
+            newRadius = distanceToCentre;
           }
           // Calculate the new minimum
           float contribution = order[points.size()-j-1].second;
           min -= contribution;
         //  std:: cout << "Contribution is " << contribution << std::endl;
           // Calculate the new threshold
-          float threshold = -pow(10,7) - 8*pow(10,3)*M_PI*pow(newRadius,2);
+          float threshold = -orderdistb[points.size()-j-1].second - 8*pow(10,3)*M_PI*pow(newRadius,2);
         //  std:: cout <<   "Min is " << min << " Threshold is " << threshold <<  " The new radius is " << newRadius << std::endl;
         //  std:: cout << "Diff is " << min/threshold << std::endl;
-         count++;
+        myfile << newRadius  << " " << threshold << " " << min << " " << threshold-min << " " << min/threshold << std::endl;
         }
+          myfile.close();
         }
-        myfile.close();
-        std::cout<<count<<std::endl;
+
+
       }
 
 
