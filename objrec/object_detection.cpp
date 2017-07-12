@@ -354,10 +354,10 @@ namespace vislab
 	minlocarray = -obj_c_sm - obj_c_dil;
 	//imwrite("minloc.png", minlocarray);
 
-	//double globmin, globmax;
+	//float globmin, globmax;
 	//cv::Point globminloc, globmaxloc;
 	//cv::minMaxLoc(obj_c_sm, &globmin, &globmax, &globminloc, &globmaxloc);
-  double min;
+  float min;
 	for(int _x=0; _x<minlocarray.cols; _x++ )
 	  for(int _y=0; _y<minlocarray.rows; _y++ ){
 	    if(minlocarray.at<float>(_y,_x) <= 0) continue;
@@ -415,6 +415,7 @@ namespace vislab
 	    int medianw = widths[widths.size()/2];
 	    int medianh = heights[heights.size()/2];
 
+
 	    Detection det;
 	    det.strength = -min;
 	    det.centre = minloc * params.vote_scale;
@@ -425,6 +426,8 @@ namespace vislab
 	    det.labelnum = m;
 	    det.mypoints = _mypoints;
       det.contributions = _contributions;
+      det.widths = widths;
+      det.heights = heights;
       det.distb=_distb;
 
 
@@ -433,8 +436,8 @@ namespace vislab
 
     //    std::cout << m << " of " << this->detection_thresholds.cols << std::endl;
 	    const float d_thresh = (this->detection_thresholds.at<float>(m) == 0) ? params.detection_thresh: this->detection_thresholds.at<float>(m);
-	    // if(min < d_thresh) detections.push_back(det);
-	    detections.push_back(det);
+	    if(min < d_thresh) detections.push_back(det);
+	    // detections.push_back(det);
 	  }
       }
       removeOverlappingDetections(detections, results);
@@ -545,18 +548,16 @@ namespace vislab
           cv::putText(img, objname, textpt, 1, width, colour);
         }
     }
-    int count;
+    int count=0;
     void ObjectDetector::filterDetections(std::vector<Detection> detections) {
+
       count ++;
       std::ofstream myfile;
-    //  std::cout << "Detections size is " << detections.size() << std::endl;
+
       for(int i=0; i<detections.size(); i++) {
         myfile.clear();
         myfile.open (std::to_string(count) + "results" + std::to_string(i) + ".txt");
-       std::cout << "Detection number " << i << " Image number " << count << std::endl;
-        float min = -detections[i].strength;
 
-        //Get the list of the points that voted for the detection and their contributions
         std::vector<cv::Point> points = detections[i].mypoints;
         std::vector<float> contributions = detections[i].contributions;
         std::vector<float> distb = detections[i].distb;
@@ -579,11 +580,43 @@ namespace vislab
           return cv::norm(a.first - detections[i].centre) < cv::norm(b.first - detections[i].centre);
         });
 
+        //  1ST METHOD : Create the 3 points needed for the parabola fitting
+        float radius,threshold,min;
+        std::vector<float> x,y;
+        // 1st point : the last point
+        radius = cv::norm(order[points.size()-2].first-detections[i].centre);
+        x.push_back(radius);
+        threshold = -orderdistb[points.size()-1].second - 8*pow(10,3)*M_PI*pow(radius,2);
+        min = -detections[i].strength - order[points.size()-1].second;
+        y.push_back(threshold-min);
+        // std::cout << "YO " << radius << "  " << threshold-min << std::endl;
+        // 2nd point : the first point
+        radius = 0;
+        x.push_back(radius);
+        threshold = -orderdistb[0].second - 8*pow(10,3)*M_PI*pow(radius,2);
+        float sum = 0;
+        for(int j=0;j<points.size();j++) {
+          sum += order[j].second;
+          }
+        min =  -detections[i].strength - sum ;
+        y.push_back(threshold-min);
+        // 3rd point : a point somewhere between the two other ones ( middle for the moment)
+        radius = cv::norm(order[floor(points.size()/2)].first-detections[i].centre);
+        x.push_back(radius);
+        threshold = -orderdistb[floor(points.size()/2)+1].second - 8*pow(10,3)*M_PI*pow(radius,2);
+        min = -detections[i].strength;
+        for(int j=floor(points.size()/2)+1;j<points.size();j++) {
+          min -= order[j].second;
+        }
+        y.push_back(threshold-min);
+        float optimalRadius = calculateOptimum(x,y,2,3).at(0);
+        float optimum = calculateOptimum(x,y,2,3).at(1);
+        // std::cout << "Detection number " << i << " Image number " << count << " 1st method " << optimalRadius << " " << optimum << std::endl;
 
-        // We delete the farest point and look at how the minimum and the threshold evolves.
+        // 2nd METHOD : Exhaustive search
+        min = -detections[i].strength;
+        optimum = -FLT_MAX;
         for(int j=0; j<points.size();j++) {
-        //  std::cout << "Try Number " << j << std::endl;
-          // Calculate the new radius that will take out the farest point.
           float distanceToCentre = cv::norm(order[points.size()-j-2].first - detections[i].centre);
           float newRadius;
           if(j==points.size()-1) {
@@ -592,22 +625,78 @@ namespace vislab
           else {
             newRadius = distanceToCentre;
           }
-          // Calculate the new minimum
           float contribution = order[points.size()-j-1].second;
           min -= contribution;
-        //  std:: cout << "Contribution is " << contribution << std::endl;
-          // Calculate the new threshold
           float threshold = -orderdistb[points.size()-j-1].second - 8*pow(10,3)*M_PI*pow(newRadius,2);
-        //  std:: cout <<   "Min is " << min << " Threshold is " << threshold <<  " The new radius is " << newRadius << std::endl;
-        //  std:: cout << "Diff is " << min/threshold << std::endl;
-        myfile << newRadius  << " " << threshold << " " << min << " " << threshold-min << " " << min/threshold << std::endl;
+          // std::cout<< newRadius << "  " << threshold-min << std::endl;
+        if(threshold-min>optimum) {
+          optimum = threshold-min;
+          optimalRadius = newRadius;
         }
+        myfile << newRadius  << " " << threshold << " " << min << " " << threshold-min << " " << min/threshold << std::endl;
+      }
+      // std::cout << "Detection number " << i << " Image number " << count << " 2nd method " << optimalRadius << " " << optimum << std::endl;
+      for(int j=0;j<points.size();j++) {
+        std::cout << detections[i].widths[j] << std::endl;
+      }
+      std::cout << "----------------------------------------" << std::endl;
           myfile.close();
         }
-
-
-      }
-
-
   }//namespace objrec
-}//namespace vislab
+
+  std::vector<float> ObjectDetector::calculateOptimum(std::vector<float> x, std::vector<float> y, int n, int N) {
+    int i,j,k;
+    float X[2*n+1];                        //Array that will store the values of sigma(xi),sigma(xi^2),sigma(xi^3)....sigma(xi^2n)
+    for (i=0;i<2*n+1;i++)
+    {
+        X[i]=0;
+        for (j=0;j<N;j++)
+            X[i]=X[i]+pow(x[j],i);        //consecutive positions of the array will store N,sigma(xi),sigma(xi^2),sigma(xi^3)....sigma(xi^2n)
+    }
+    float B[n+1][n+2],a[n+1];            //B is the Normal matrix(augmented) that will store the equations, 'a' is for value of the final coefficients
+    for (i=0;i<=n;i++)
+        for (j=0;j<=n;j++)
+            B[i][j]=X[i+j];            //Build the Normal matrix by storing the corresponding coefficients at the right positions except the last column of the matrix
+    float Y[n+1];                    //Array to store the values of sigma(yi),sigma(xi*yi),sigma(xi^2*yi)...sigma(xi^n*yi)
+    for (i=0;i<n+1;i++)
+    {
+        Y[i]=0;
+        for (j=0;j<N;j++)
+        Y[i]=Y[i]+pow(x[j],i)*y[j];        //consecutive positions will store sigma(yi),sigma(xi*yi),sigma(xi^2*yi)...sigma(xi^n*yi)
+    }
+    for (i=0;i<=n;i++)
+        B[i][n+1]=Y[i];                //load the values of Y as the last column of B(Normal Matrix but augmented)
+    n=n+1;                //n is made n+1 because the Gaussian Elimination part below was for n equations, but here n is the degree of polynomial and for n degree we get n+1 equations
+    for (i=0;i<n;i++)                    //From now Gaussian Elimination starts(can be ignored) to solve the set of linear equations (Pivotisation)
+        for (k=i+1;k<n;k++)
+            if (B[i][i]<B[k][i])
+                for (j=0;j<=n;j++)
+                {
+                    float temp=B[i][j];
+                    B[i][j]=B[k][j];
+                    B[k][j]=temp;
+                }
+
+    for (i=0;i<n-1;i++)            //loop to perform the gauss elimination
+        for (k=i+1;k<n;k++)
+            {
+                float t=B[k][i]/B[i][i];
+                for (j=0;j<=n;j++)
+                    B[k][j]=B[k][j]-t*B[i][j];    //make the elements below the pivot elements equal to zero or elimnate the variables
+            }
+    for (i=n-1;i>=0;i--)                //back-substitution
+    {                        //x is an array whose values correspond to the values of x,y,z..
+        a[i]=B[i][n];                //make the variable to be calculated equal to the rhs of the last equation
+        for (j=0;j<n;j++)
+            if (j!=i)            //then subtract all the lhs values except the coefficient of the variable whose value                                   is being calculated
+                a[i]=a[i]-B[i][j]*a[j];
+        a[i]=a[i]/B[i][i];            //now finally divide the rhs by the coefficient of the variable to be calculated
+    }
+    std::vector<float> results;
+    float optimum = -a[1]/(2*a[2]);
+    results.push_back(optimum);
+    results.push_back(a[2]*pow(optimum,2) + a[1]*pow(optimum,1) + a[0]);
+    return results;
+  }
+}
+}
